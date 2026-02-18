@@ -46,7 +46,9 @@ export const DisciplineZ = z.object({
       }),
     )
     .optional(),
-  revisions: z.array(RevisionZ),
+  // 일부 공종(예: 구조)은 리전 하위에서만 리비전을 관리하므로 누락될 수 있다.
+  // 누락 시 빈 배열로 정칙화하여 일관된 접근 보장.
+  revisions: z.array(RevisionZ).default([]),
 });
 
 export const DrawingZ = z.object({
