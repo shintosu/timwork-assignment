@@ -2,6 +2,8 @@
 
 도면 메타데이터를 정규화/검증하고, 사용자가 원하는 레이어(도면/공종/영역/리비전)를 빠르게 찾아 이미지를 확인하는 최소 뷰를 제공합니다.
 
+github 링크 : https://github.com/shintosu/timwork-assignment
+
 ## 실행 방법
 
 ```bash
