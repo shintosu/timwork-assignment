@@ -1,4 +1,8 @@
 import type { Metadata } from "../types/raw";
+import {
+  validateMetadata,
+  formatValidationIssues,
+} from "../validation/validateMetadata.zod";
 
 let cached: Metadata | null = null;
 
@@ -27,9 +31,25 @@ export async function loadMetadata(options?: {
 
   const json = (await res.json()) as unknown;
 
-  // NOTE: We trust the assignment data shape at runtime for now.
-  // TODO: setup zod type validation
-  cached = json as Metadata;
+  const result = validateMetadata(json);
 
+  if (!result.ok) {
+    if (import.meta.env.DEV) {
+      throw new Error(
+        `metadata validation failed.\n${formatValidationIssues(result.errors)}`,
+      );
+    }
+    // In production, log and proceed with raw data to avoid blocking UI.
+    // Normalizer has defensive fallbacks.
+    console.error("[metadata] validation errors:", result.errors);
+    cached = json as Metadata;
+    return cached;
+  }
+
+  if (result.warnings.length) {
+    console.warn("[metadata] warnings:", result.warnings);
+  }
+
+  cached = result.data as Metadata;
   return cached;
 }

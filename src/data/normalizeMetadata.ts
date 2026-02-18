@@ -2,16 +2,13 @@ import type { Metadata, Drawing as RawDrawing } from "../types/raw";
 import type {
   DisciplineLayer,
   DrawingLayer,
-  ImageTransform,
   LayerKey,
   LayerNode,
   NormalizedMeta,
-  Polygon,
   RegionLayer,
   RegionRevisionLayer,
   SelfContainedRevisionLayer,
   SimpleRevisionLayer,
-  Transform,
 } from "../types/normalized";
 
 import {
@@ -21,69 +18,7 @@ import {
   makeRevisionKey,
 } from "../domain/layerKey";
 
-function toPublicDrawingSrc(filename: string): string {
-  // assignment spec: image is a filename inside public/drawings
-  return `/drawings/${filename}`;
-}
-
-function normalizeRelativeTo(
-  relativeTo: string | undefined,
-): string | undefined {
-  if (!relativeTo) return undefined;
-  // assignment spec: relativeTo points to an image filename in drawings
-  return toPublicDrawingSrc(relativeTo);
-}
-
-function toTransform(
-  t: { x: number; y: number; scale: number; rotation: number } | undefined,
-): Transform {
-  return {
-    x: t?.x ?? 0,
-    y: t?.y ?? 0,
-    scale: t?.scale ?? 1,
-    rotation: t?.rotation ?? 0,
-  };
-}
-
-function toImageTransform(
-  t:
-    | {
-        relativeTo?: string;
-        x: number;
-        y: number;
-        scale: number;
-        rotation: number;
-      }
-    | undefined,
-): ImageTransform {
-  return {
-    relativeTo: t?.relativeTo,
-    x: t?.x ?? 0,
-    y: t?.y ?? 0,
-    scale: t?.scale ?? 1,
-    rotation: t?.rotation ?? 0,
-  };
-}
-
-function toPolygon(
-  p:
-    | {
-        vertices: [number, number][];
-        polygonTransform: {
-          x: number;
-          y: number;
-          scale: number;
-          rotation: number;
-        };
-      }
-    | undefined,
-): Polygon | undefined {
-  if (!p) return undefined;
-  return {
-    vertices: p.vertices,
-    transform: toTransform(p.polygonTransform),
-  };
-}
+// polygon mapping is inlined where used (avoid extra helper)
 
 function pushRefGroup(
   refGroups: Record<string, LayerKey[]>,
@@ -118,7 +53,7 @@ export function normalizeMetadata(raw: Metadata): NormalizedMeta {
       key: makeDrawingKey(drawingId),
       drawingId,
       drawingName: drawing.name,
-      image: toPublicDrawingSrc(drawing.image),
+      image: drawing.image,
     };
     layersByKey[drawingLayer.key] = drawingLayer;
 
@@ -130,13 +65,12 @@ export function normalizeMetadata(raw: Metadata): NormalizedMeta {
     const disciplines = drawing.disciplines ?? {};
 
     for (const [disciplineKey, discipline] of Object.entries(disciplines)) {
-      const disciplineImage = discipline.image
-        ? toPublicDrawingSrc(discipline.image)
-        : // Some special cases (e.g. self-contained revisions) do not have discipline-level image.
-          // We still allow a discipline layer for navigation by falling back to the first revision image.
-          discipline.revisions?.[0]?.image
-          ? toPublicDrawingSrc(discipline.revisions[0].image)
-          : toPublicDrawingSrc(drawing.image);
+      const disciplineImage =
+        discipline.image ??
+        // Some special cases (e.g. self-contained revisions) do not have discipline-level image.
+        // We still allow a discipline layer for navigation by falling back to the first revision image.
+        discipline.revisions?.[0]?.image ??
+        drawing.image;
 
       const disciplineLayerKey = makeDisciplineKey(drawingId, disciplineKey);
 
@@ -147,17 +81,20 @@ export function normalizeMetadata(raw: Metadata): NormalizedMeta {
         drawingName: drawing.name,
         discipline: disciplineKey,
         image: disciplineImage,
-        imageTransform: discipline.imageTransform
-          ? toImageTransform(discipline.imageTransform)
+        imageTransform: discipline.imageTransform,
+        polygon: discipline.polygon
+          ? {
+              vertices: discipline.polygon.vertices,
+              transform: discipline.polygon.polygonTransform,
+            }
           : undefined,
-        polygon: toPolygon(discipline.polygon),
       };
       layersByKey[disciplineLayer.key] = disciplineLayer;
 
       // Overlay grouping is based on the reference (relativeTo) image.
       pushRefGroup(
         referenceGroups,
-        normalizeRelativeTo(disciplineLayer.imageTransform?.relativeTo),
+        disciplineLayer.imageTransform?.relativeTo,
         disciplineLayer.key,
       );
 
@@ -169,13 +106,10 @@ export function normalizeMetadata(raw: Metadata): NormalizedMeta {
           revision: rev.version,
         });
 
-        const revImage = toPublicDrawingSrc(rev.image);
-
-        const revHasOwnTransform = !!rev.imageTransform;
-        const revHasOwnPolygon = !!rev.polygon;
+        const revImage = rev.image;
 
         // Special case: revision carries its own transform + polygon (e.g. 주민공동시설 건축)
-        if (revHasOwnTransform && revHasOwnPolygon) {
+        if (rev.imageTransform && rev.polygon) {
           const node: SelfContainedRevisionLayer = {
             kind: "revision",
             variant: "selfContained",
@@ -188,14 +122,17 @@ export function normalizeMetadata(raw: Metadata): NormalizedMeta {
             description: rev.description,
             changes: rev.changes,
             image: revImage,
-            imageTransform: toImageTransform(rev.imageTransform),
-            polygon: toPolygon(rev.polygon)!,
+            imageTransform: rev.imageTransform,
+            polygon: {
+              vertices: rev.polygon.vertices,
+              transform: rev.polygon.polygonTransform,
+            },
           };
           layersByKey[node.key] = node;
 
           pushRefGroup(
             referenceGroups,
-            normalizeRelativeTo(node.imageTransform.relativeTo),
+            node.imageTransform.relativeTo,
             node.key,
           );
           continue;
@@ -219,7 +156,7 @@ export function normalizeMetadata(raw: Metadata): NormalizedMeta {
         // Simple revisions usually share the discipline's reference image.
         pushRefGroup(
           referenceGroups,
-          normalizeRelativeTo(disciplineLayer.imageTransform?.relativeTo),
+          disciplineLayer.imageTransform?.relativeTo,
           node.key,
         );
       }
@@ -241,14 +178,19 @@ export function normalizeMetadata(raw: Metadata): NormalizedMeta {
           discipline: disciplineKey,
           region: regionKey,
           image: disciplineImage,
-          polygon: toPolygon(region.polygon),
+          polygon: region.polygon
+            ? {
+                vertices: region.polygon.vertices,
+                transform: region.polygon.polygonTransform,
+              }
+            : undefined,
         };
         layersByKey[regionLayer.key] = regionLayer;
 
         // Region's own overlay grouping is typically tied to the discipline reference.
         pushRefGroup(
           referenceGroups,
-          normalizeRelativeTo(disciplineLayer.imageTransform?.relativeTo),
+          disciplineLayer.imageTransform?.relativeTo,
           regionLayer.key,
         );
 
@@ -260,16 +202,12 @@ export function normalizeMetadata(raw: Metadata): NormalizedMeta {
             revision: rev.version,
           });
 
-          const imageTransform = rev.imageTransform
-            ? toImageTransform(rev.imageTransform)
-            : {
-                // Defensive fallback: if data is missing, keep it renderable.
-                relativeTo: disciplineLayer.imageTransform?.relativeTo,
-                x: 0,
-                y: 0,
-                scale: 1,
-                rotation: 0,
-              };
+          if (!rev.imageTransform) {
+            // Should be enforced by validation; skip if missing.
+            continue;
+          }
+
+          const inheritedOrRevPolygon = rev.polygon ?? region.polygon;
 
           const node: RegionRevisionLayer = {
             kind: "revision",
@@ -283,15 +221,20 @@ export function normalizeMetadata(raw: Metadata): NormalizedMeta {
             date: rev.date,
             description: rev.description,
             changes: rev.changes,
-            image: toPublicDrawingSrc(rev.image),
-            imageTransform,
-            polygon: toPolygon(rev.polygon) ?? toPolygon(region.polygon),
+            image: rev.image,
+            imageTransform: rev.imageTransform,
+            polygon: inheritedOrRevPolygon
+              ? {
+                  vertices: inheritedOrRevPolygon.vertices,
+                  transform: inheritedOrRevPolygon.polygonTransform,
+                }
+              : undefined,
           };
           layersByKey[node.key] = node;
 
           pushRefGroup(
             referenceGroups,
-            normalizeRelativeTo(node.imageTransform.relativeTo),
+            node.imageTransform.relativeTo,
             node.key,
           );
         }
