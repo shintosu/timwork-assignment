@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
 
 import { loadMetadata } from './data/loadMetadata'
 import { normalizeMetadata } from './data/normalizeMetadata'
@@ -49,6 +49,9 @@ function nodeLabel(node: LayerNode) {
 export default function App() {
   const { status, meta, error } = useNormalizedData()
   const [userSelectedKey, setUserSelectedKey] = useState<LayerKey | undefined>(undefined)
+  const [overlayEnabled, setOverlayEnabled] = useState(false)
+  const [overlayKey, setOverlayKey] = useState<LayerKey | undefined>(undefined)
+  const [overlayOpacity, setOverlayOpacity] = useState(0.6)
 
   const options = useMemo(() => {
     if (!meta) return [] as Array<{ key: LayerKey, label: string }>
@@ -71,6 +74,103 @@ export default function App() {
 
   const selectedNode: LayerNode | undefined = selectedKey && meta ? meta.layersByKey[selectedKey] : undefined
 
+  // Overlay candidates: nodes that carry imageTransform (discipline, region-revision, selfContained-revision)
+  const overlayOptions = useMemo(() => {
+    if (!meta) return [] as Array<{ key: LayerKey, label: string }>
+    const nodes = Object.values(meta.layersByKey).filter(n =>
+      (n.kind === 'discipline' && n.imageTransform) ||
+      (n.kind === 'revision' && (n.variant === 'region' || n.variant === 'selfContained'))
+    )
+    return nodes.map(n => ({ key: n.key, label: nodeLabel(n) }))
+  }, [meta])
+
+  type TransformDef = { x: number, y: number, scale: number, rotation: number, relativeTo?: string }
+  const getNodeTransform = (node: LayerNode | undefined): TransformDef | undefined => {
+    if (!node) return undefined
+    if (node.kind === 'discipline') return node.imageTransform
+    if (node.kind === 'revision') {
+      if (node.variant === 'region' || node.variant === 'selfContained') return node.imageTransform
+    }
+    return undefined
+  }
+
+  const overlayNode = overlayEnabled && overlayKey && meta ? meta.layersByKey[overlayKey] : undefined
+  const overlayTransform = getNodeTransform(overlayNode)
+  const baseSrc = overlayEnabled && overlayTransform?.relativeTo ? overlayTransform.relativeTo : selectedNode?.image
+
+  function Stage() {
+    const [baseNatural, setBaseNatural] = useState<{w:number,h:number} | null>(null)
+    const [containerSize, setContainerSize] = useState<{w:number,h:number}>({w:0,h:0})
+    const containerRef = useRef<HTMLDivElement>(null)
+
+    useEffect(() => {
+      function handleResize() {
+        const el = containerRef.current
+        if (!el) return
+        setContainerSize({ w: el.clientWidth, h: el.clientHeight })
+      }
+      handleResize()
+      window.addEventListener('resize', handleResize)
+      return () => window.removeEventListener('resize', handleResize)
+    }, [containerRef])
+
+    const fit = useMemo(() => {
+      if (!baseNatural || !containerSize.w || !containerSize.h) return { scale: 1 }
+      const sx = containerSize.w / baseNatural.w
+      const sy = containerSize.h / baseNatural.h
+      return { scale: Math.min(sx, sy) }
+    }, [baseNatural, containerSize])
+
+    const rad2deg = (r:number) => (r * 180) / Math.PI
+
+    return (
+      <div className="w-full h-full overflow-auto flex items-center justify-center">
+        <div ref={containerRef} className="w-full h-full">
+          {baseSrc ? (
+            <div
+              className="relative"
+              style={{
+                width: baseNatural?.w ?? undefined,
+                height: baseNatural?.h ?? undefined,
+                transform: `scale(${fit.scale})`,
+                transformOrigin: 'top left',
+              }}
+            >
+              <img
+                src={baseSrc}
+                alt="base"
+                onLoad={(e) => {
+                  const img = e.currentTarget
+                  setBaseNatural({ w: img.naturalWidth, h: img.naturalHeight })
+                }}
+                style={{ display: baseNatural ? 'block' : 'none', width: baseNatural?.w, height: baseNatural?.h }}
+              />
+              {!baseNatural && (
+                <img src={baseSrc} alt="base-measure" className="invisible" />
+              )}
+              {overlayEnabled && overlayNode && overlayTransform && (
+                <img
+                  src={overlayNode.image}
+                  alt="overlay"
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    transform: `translate(${overlayTransform.x}px, ${overlayTransform.y}px) rotate(${rad2deg(overlayTransform.rotation)}deg) scale(${overlayTransform.scale})`,
+                    transformOrigin: 'top left',
+                    opacity: overlayOpacity,
+                  }}
+                />
+              )}
+            </div>
+          ) : (
+            <div className="text-base-content/60">표시할 이미지가 없습니다</div>
+          )}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen flex flex-col">
       <div className="navbar bg-base-100 border-b">
@@ -79,7 +179,7 @@ export default function App() {
         </div>
       </div>
 
-      <div className="w-full border-b p-3 flex items-center gap-4 bg-base-100">
+      <div className="w-full border-b p-3 flex flex-wrap items-center gap-4 bg-base-100">
         {status === 'loading' && <span className="loading loading-spinner loading-sm" aria-label="loading" />}
         {status === 'error' && (
           <div role="alert" className="alert alert-error py-2">
@@ -103,6 +203,40 @@ export default function App() {
             </select>
           </div>
         )}
+
+        {status === 'ready' && (
+          <div className="flex items-end gap-3">
+            <label className="label cursor-pointer">
+              <span className="label-text mr-2">겹쳐보기</span>
+              <input type="checkbox" className="toggle" checked={overlayEnabled} onChange={(e) => setOverlayEnabled(e.target.checked)} />
+            </label>
+            {overlayEnabled && (
+              <>
+                <div className="form-control min-w-64">
+                  <label className="label">
+                    <span className="label-text">오버레이 레이어</span>
+                  </label>
+                  <select
+                    className="select select-bordered"
+                    value={overlayKey ?? ''}
+                    onChange={(e) => setOverlayKey(e.target.value as LayerKey)}
+                  >
+                    <option value="" disabled>선택하세요</option>
+                    {overlayOptions.map(opt => (
+                      <option key={opt.key} value={opt.key}>{opt.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-control">
+                  <label className="label">
+                    <span className="label-text">오버레이 불투명도 ({Math.round(overlayOpacity*100)}%)</span>
+                  </label>
+                  <input type="range" min={0} max={1} step={0.01} value={overlayOpacity} onChange={(e) => setOverlayOpacity(parseFloat(e.target.value))} className="range range-xs" />
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       <main className="grid grid-cols-[280px,1fr] gap-4 p-4 flex-1 min-h-0">
@@ -118,13 +252,18 @@ export default function App() {
                 {selectedNode.kind === 'revision' && (
                   <div className="text-sm">리비전: {selectedNode.revision}{selectedNode.date ? ` · ${selectedNode.date}` : ''}</div>
                 )}
+                <div className="text-xs text-base-content/60">
+                  {overlayEnabled && overlayTransform?.relativeTo ? (
+                    <span>기준 이미지: {overlayTransform.relativeTo}</span>
+                  ) : (
+                    <span>표시 이미지: {selectedNode.image}</span>
+                  )}
+                </div>
               </div>
             </div>
             <div className="card bg-base-100 shadow-sm h-full">
               <div className="card-body p-0 h-full">
-                <div className="w-full h-full overflow-auto flex items-center justify-center">
-                  <img className="max-w-full max-h-full object-contain" src={selectedNode.image} alt={nodeLabel(selectedNode)} />
-                </div>
+                <Stage />
               </div>
             </div>
           </>

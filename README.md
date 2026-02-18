@@ -28,10 +28,11 @@ npm run dev
 - 이미지 표시: 선택 레이어의 도면 이미지를 카드에 맞춰 렌더링(컨테이너 스크롤)
 - 컨텍스트 인식: 도면명/ID, 공종, 리비전/발행일 표시
 - 로딩/에러 UX: daisyUI 스피너/알림으로 상태 피드백
+- 오버레이 비교: 베이스/오버레이 2중 선택 + 투명도 슬라이더. 오버레이는 `imageTransform(translate/rotate/scale)`를 CSS transform으로 적용하여 기준(base) 이미지 위에 정렬 표시
 
 ## 미완성 기능(향후 확장 계획)
 
-- 오버레이 비교: 베이스/오버레이 2중 선택 + 투명도 슬라이더, `referenceGroups` 기반 후보 추천
+- 오버레이 후보 제한: `referenceGroups`(같은 relativeTo)만 자동 필터/추천
 - 리비전 타임라인: 공종/영역 기준의 버전 스크러빙, `changes` 요약 표시
 - URL 상태 동기화: 선택 레이어 key를 쿼리스트링으로 유지/공유
 - 추가 검증: 개발 모드에서 `/drawings/{filename}` 존재 확인(옵션)
